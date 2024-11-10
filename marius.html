@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Back to the Field - Game</title>
+    <style>
+      body,
+      html {
+        height: 100%;
+        margin: 0;
+        font-family: "Arial", sans-serif;
+        background-color: #000;
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+      }
+      #game-container {
+        width: 800px;
+        height: 600px;
+        position: relative;
+      }
+      #menu-screen,
+      #game-over-screen,
+      #level-screen {
+        width: 100%;
+        height: 100%;
+        position: absolute;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.7);
+        z-index: 10;
+      }
+      #menu-screen h1,
+      #game-over-screen h1,
+      #level-screen h1 {
+        font-size: 3em;
+      }
+      #menu-screen p,
+      #game-over-screen p,
+      #level-screen p {
+        font-size: 1.5em;
+        max-width: 700px;
+      }
+      #menu-screen button,
+      #game-over-screen button,
+      #level-screen button {
+        margin-top: 20px;
+        padding: 10px 20px;
+        font-size: 1.5em;
+        cursor: pointer;
+        background-color: #007bff;
+        border: none;
+        color: #fff;
+      }
+      canvas {
+        background-color: #2c2c2c;
+      }
+      #score {
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        font-size: 1.5em;
+        z-index: 5;
+      }
+      /* Added style for the countdown timer */
+      #countdown {
+        position: absolute;
+        top: 20px;
+        left: 20px;
+        font-size: 1.5em;
+        z-index: 5;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="game-container">
+      <div id="menu-screen">
+        <h1>Back to the Field</h1>
+        <p>
+          You are a lone soldier, thrust into the chaos of an endless
+          battlefield. Dodge obstacles, take down enemies, and see how far you
+          can get. There's no turning back - it's you against the field. Are you
+          ready to go back to the field?
+        </p>
+        <p>Controls: Use Arrow keys to move, and Space to shoot.</p>
+        <button id="start-game">Start Game</button>
+      </div>
+      <div id="game-over-screen" style="display: none">
+        <h1>Game Over</h1>
+        <p>Your journey has come to an end. Do you want to try again?</p>
+        <button id="retry-game">Retry</button>
+      </div>
+      <div id="level-screen" style="display: none">
+        <h1>Level <span id="level-number"></span></h1>
+        <p>Get ready for the next challenge!</p>
+        <button id="start-level">Start Level</button>
+      </div>
+      <div id="score">Score: 0 | Lives: 3</div>
+      <!-- Added countdown timer display -->
+      <div id="countdown">Next Level in 60 seconds</div>
+      <canvas id="game-canvas" width="800" height="600"></canvas>
+    </div>
+
+    <script>
+      const canvas = document.getElementById("game-canvas");
+      const ctx = canvas.getContext("2d");
+      const scoreDisplay = document.getElementById("score");
+      const countdownDisplay = document.getElementById("countdown"); // Countdown element
+      const levelScreen = document.getElementById("level-screen");
+      const levelNumberDisplay = document.getElementById("level-number");
+
+      // Load the player's spaceship image
+      const playerImage = new Image();
+      playerImage.src = "user.png";
+
+      // Load sounds
+      const maxSimultaneousLasers = 5;
+      let laserSounds = [];
+      for (let i = 0; i < maxSimultaneousLasers; i++) {
+        laserSounds.push(new Audio("retro-laser.mp3"));
+      }
+      let currentLaserSoundIndex = 0;
+
+      const maxSimultaneousExplosions = 5;
+      let explosionSounds = [];
+      for (let i = 0; i < maxSimultaneousExplosions; i++) {
+        explosionSounds.push(new Audio("explosion.mp3"));
+      }
+      let currentExplosionSoundIndex = 0;
+
+      function playLaserSound() {
+        let sound = laserSounds[currentLaserSoundIndex];
+        sound.currentTime = 0;
+        sound.play();
+        currentLaserSoundIndex =
+          (currentLaserSoundIndex + 1) % maxSimultaneousLasers;
+      }
+
+      function playExplosionSound() {
+        let sound = explosionSounds[currentExplosionSoundIndex];
+        sound.currentTime = 0;
+        sound.play();
+        currentExplosionSoundIndex =
+          (currentExplosionSoundIndex + 1) % maxSimultaneousExplosions;
+      }
+
+      let player = {
+        x: 50,
+        y: 500,
+        width: 46,
+        height: 26,
+        speed: 5,
+        dx: 0,
+        dy: 0,
+        alive: true,
+        lives: 3,
+      };
+
+      let enemies = [];
+      let bullets = [];
+      let obstacles = [];
+      let powerUps = [];
+      let score = 0;
+      let level = 1;
+      let levelDuration = 60000; // Level duration in milliseconds
+      let levelStartTime; // Time when the level started
+      let levelTimer;
+      let enemyInterval;
+      let obstacleInterval;
+      let explosionParticles = [];
+
+      let gameRunning = false; // Flag to check if the game loop is running
+      let gamePaused = false; // Flag to pause and resume the game
+      let eventListenersAdded = false; // To prevent multiple event listeners
+
+      document
+        .getElementById("start-game")
+        .addEventListener("click", function () {
+          document.getElementById("menu-screen").style.display = "none";
+          resetGame();
+          startLevel();
+          initGame(); // Start the game loop if not already running
+        });
+
+      document
+        .getElementById("retry-game")
+        .addEventListener("click", function () {
+          document.getElementById("game-over-screen").style.display = "none";
+          resetGame();
+          startLevel();
+          initGame();
+        });
+
+      document
+        .getElementById("start-level")
+        .addEventListener("click", function () {
+          startLevelGameplay();
+        });
+
+      function initGame() {
+        if (!gameRunning) {
+          gameRunning = true;
+          requestAnimationFrame(update);
+        }
+      }
+
+      function startLevel() {
+        levelNumberDisplay.textContent = level;
+        levelScreen.style.display = "flex";
+        gamePaused = true; // Pause the game during the level screen
+      }
+
+      function startLevelGameplay() {
+        levelScreen.style.display = "none";
+        gamePaused = false; // Resume the game
+
+        // Start level timer
+        levelStartTime = Date.now(); // Record the start time
+        levelTimer = setTimeout(() => {
+          levelUp();
+        }, levelDuration);
+
+        generateEnemies();
+        generateObstacles();
+
+        // Ensure event listeners are added only once
+        if (!eventListenersAdded) {
+          document.addEventListener("keydown", keyDown);
+          document.addEventListener("keyup", keyUp);
+          eventListenersAdded = true;
+        }
+      }
+
+      function levelUp() {
+        level++;
+        clearInterval(enemyInterval);
+        clearInterval(obstacleInterval);
+        startLevel();
+      }
+
+      function keyDown(e) {
+        if (e.key === "ArrowRight" || e.key === "Right") {
+          player.dx = player.speed;
+        } else if (e.key === "ArrowLeft" || e.key === "Left") {
+          player.dx = -player.speed;
+        } else if (e.key === "ArrowUp" || e.key === "Up") {
+          player.dy = -player.speed;
+        } else if (e.key === "ArrowDown" || e.key === "Down") {
+          player.dy = player.speed;
+        } else if (e.key === " " || e.key === "Spacebar") {
+          shoot();
+        }
+      }
+
+      function keyUp(e) {
+        if (
+          e.key === "ArrowRight" ||
+          e.key === "Right" ||
+          e.key === "ArrowLeft" ||
+          e.key === "Left"
+        ) {
+          player.dx = 0;
+        } else if (
+          e.key === "ArrowUp" ||
+          e.key === "Up" ||
+          e.key === "ArrowDown" ||
+          e.key === "Down"
+        ) {
+          player.dy = 0;
+        }
+      }
+
+      function update() {
+        if (!gameRunning) return; // Exit if the game is not running
+
+        if (gamePaused) {
+          requestAnimationFrame(update); // Continue the loop
+          return; // Do not update game state if paused
+        }
+
+        clear();
+
+        if (!player.alive) {
+          // Draw explosions and wait until particles are gone
+          updateExplosionParticles();
+          drawExplosionParticles();
+          if (explosionParticles.length === 0) {
+            if (player.lives <= 0) {
+              endGame();
+            } else {
+              resetLevel();
+            }
+          }
+          requestAnimationFrame(update);
+          return;
+        }
+
+        movePlayer();
+        moveEnemies();
+        moveBullets();
+        moveObstacles();
+        checkCollisions();
+
+        drawPlayer();
+        drawEnemies();
+        drawBullets();
+        drawObstacles();
+        updateExplosionParticles();
+        drawExplosionParticles();
+        updateScore();
+        updateCountdown(); // Update the countdown timer
+
+        requestAnimationFrame(update);
+      }
+
+      function clear() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+
+      function drawPlayer() {
+        if (player.alive) {
+          // Draw the player's spaceship image
+          ctx.drawImage(
+            playerImage,
+            player.x,
+            player.y,
+            player.width,
+            player.height
+          );
+        }
+      }
+
+      function movePlayer() {
+        player.x += player.dx;
+        player.y += player.dy;
+
+        // Prevent player from going out of bounds
+        if (player.x < 0) player.x = 0;
+        if (player.x + player.width > canvas.width)
+          player.x = canvas.width - player.width;
+        if (player.y < 0) player.y = 0;
+        if (player.y + player.height > canvas.height)
+          player.y = canvas.height - player.height;
+      }
+
+      function shoot() {
+        bullets.push({
+          x: player.x + player.width,
+          y: player.y + player.height / 2,
+          width: 10,
+          height: 4,
+          speed: 7,
+        });
+        playLaserSound(); // Play laser sound when shooting
+      }
+
+      function drawBullets() {
+        ctx.fillStyle = "yellow";
+        bullets.forEach((bullet) => {
+          ctx.fillRect(bullet.x, bullet.y, bullet.width, bullet.height);
+        });
+      }
+
+      function moveBullets() {
+        bullets.forEach((bullet) => {
+          bullet.x += bullet.speed;
+        });
+        bullets = bullets.filter((bullet) => bullet.x < canvas.width);
+      }
+
+      function generateEnemies() {
+        enemyInterval = setInterval(() => {
+          // Generate more enemies as the level increases
+          for (let i = 0; i < level; i++) {
+            enemies.push({
+              x: canvas.width,
+              y: Math.random() * (canvas.height - 30),
+              width: 30,
+              height: 30,
+              speed: 2, // Keep speed constant
+            });
+          }
+        }, 2000); // Keep interval constant
+      }
+
+      function drawEnemies() {
+        ctx.fillStyle = "red";
+        enemies.forEach((enemy) => {
+          ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+        });
+      }
+
+      function moveEnemies() {
+        enemies.forEach((enemy) => {
+          enemy.x -= enemy.speed;
+        });
+        enemies = enemies.filter((enemy) => enemy.x + enemy.width > 0);
+      }
+
+      function generateObstacles() {
+        obstacleInterval = setInterval(() => {
+          // Generate more obstacles as the level increases
+          for (let i = 0; i < level; i++) {
+            obstacles.push({
+              x: canvas.width,
+              y: Math.random() * (canvas.height - 20),
+              width: 20,
+              height: 20,
+              speed: 3, // Keep speed constant
+            });
+          }
+        }, 3000); // Keep interval constant
+      }
+
+      function drawObstacles() {
+        ctx.fillStyle = "brown";
+        obstacles.forEach((obstacle) => {
+          ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
+        });
+      }
+
+      function moveObstacles() {
+        obstacles.forEach((obstacle) => {
+          obstacle.x -= obstacle.speed;
+        });
+        obstacles = obstacles.filter(
+          (obstacle) => obstacle.x + obstacle.width > 0
+        );
+      }
+
+      function checkCollisions() {
+        enemies.forEach((enemy, index) => {
+          if (isColliding(player, enemy)) {
+            explodeEnemy(enemy);
+            enemies.splice(index, 1);
+            loseLife();
+          }
+        });
+
+        obstacles.forEach((obstacle, index) => {
+          if (isColliding(player, obstacle)) {
+            obstacles.splice(index, 1);
+            loseLife();
+          }
+        });
+
+        bullets.forEach((bullet, bulletIndex) => {
+          enemies.forEach((enemy, enemyIndex) => {
+            if (isColliding(bullet, enemy)) {
+              score += 100;
+              explodeEnemy(enemy);
+              enemies.splice(enemyIndex, 1);
+              bullets.splice(bulletIndex, 1);
+            }
+          });
+        });
+      }
+
+      function isColliding(a, b) {
+        return (
+          a.x < b.x + b.width &&
+          a.x + a.width > b.x &&
+          a.y < b.y + b.height &&
+          a.y + a.height > b.y
+        );
+      }
+
+      function loseLife() {
+        player.lives -= 1;
+        player.alive = false;
+        explodePlayer();
+      }
+
+      function resetLevel() {
+        gamePaused = true; // Pause the game during reset
+
+        // Reset the level timer to ensure the level doesn't increase when a life is lost
+        clearTimeout(levelTimer);
+
+        clearInterval(enemyInterval);
+        clearInterval(obstacleInterval);
+
+        enemies = [];
+        bullets = [];
+        obstacles = [];
+        explosionParticles = [];
+
+        player.x = 50;
+        player.y = 500;
+        player.dx = 0;
+        player.dy = 0;
+        player.alive = true;
+
+        startLevel(); // Show level screen again
+      }
+
+      function explodePlayer() {
+        playExplosionSound(); // Play explosion sound when player dies
+        for (let i = 0; i < 20; i++) {
+          explosionParticles.push({
+            x: player.x + player.width / 2,
+            y: player.y + player.height / 2,
+            dx: (Math.random() - 0.5) * 10,
+            dy: (Math.random() - 0.5) * 10,
+            size: Math.random() * 5 + 2,
+            color: "orange",
+            life: 30,
+          });
+        }
+      }
+
+      function explodeEnemy(enemy) {
+        playExplosionSound(); // Play explosion sound when enemy dies
+        for (let i = 0; i < 20; i++) {
+          explosionParticles.push({
+            x: enemy.x + enemy.width / 2,
+            y: enemy.y + enemy.height / 2,
+            dx: (Math.random() - 0.5) * 10,
+            dy: (Math.random() - 0.5) * 10,
+            size: Math.random() * 5 + 2,
+            color: "red",
+            life: 30,
+          });
+        }
+      }
+
+      function updateExplosionParticles() {
+        explosionParticles.forEach((particle) => {
+          particle.x += particle.dx;
+          particle.y += particle.dy;
+          particle.life -= 1;
+        });
+        explosionParticles = explosionParticles.filter((p) => p.life > 0);
+      }
+
+      function drawExplosionParticles() {
+        explosionParticles.forEach((particle) => {
+          ctx.fillStyle = particle.color;
+          ctx.fillRect(particle.x, particle.y, particle.size, particle.size);
+        });
+      }
+
+      function updateScore() {
+        scoreDisplay.textContent = `Score: ${score} | Lives: ${player.lives}`;
+      }
+
+      function updateCountdown() {
+        if (levelStartTime) {
+          const elapsedTime = Date.now() - levelStartTime;
+          const timeLeft = Math.max(
+            0,
+            Math.ceil((levelDuration - elapsedTime) / 1000)
+          );
+          countdownDisplay.textContent = `Next Level in ${timeLeft} seconds`;
+        } else {
+          countdownDisplay.textContent = "";
+        }
+      }
+
+      function endGame() {
+        player.alive = false;
+        explodePlayer();
+        clearTimeout(levelTimer);
+        gameRunning = false; // Stop the game loop
+        gamePaused = true; // Pause the game
+        showGameOverScreen();
+      }
+
+      function showGameOverScreen() {
+        document.getElementById("game-over-screen").style.display = "flex";
+        document.removeEventListener("keydown", keyDown);
+        document.removeEventListener("keyup", keyUp);
+        eventListenersAdded = false;
+      }
+
+      function resetGame() {
+        player = {
+          x: 50,
+          y: 500,
+          width: 46,
+          height: 26,
+          speed: 5,
+          dx: 0,
+          dy: 0,
+          alive: true,
+          lives: 3,
+        };
+        enemies = [];
+        bullets = [];
+        obstacles = [];
+        explosionParticles = [];
+        score = 0;
+        level = 1;
+        clearInterval(enemyInterval);
+        clearInterval(obstacleInterval);
+        clearTimeout(levelTimer);
+        gameRunning = false;
+        gamePaused = false;
+        levelStartTime = null;
+        countdownDisplay.textContent = "";
+        eventListenersAdded = false;
+      }
+    </script>
+  </body>
+</html>
